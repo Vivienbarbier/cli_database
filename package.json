@@ -1,0 +1,25 @@
+{
+  "name": "data_upload",
+  "version": "1.0.0",
+  "description": "Upload data into firestore database",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vivienbarbier/data_upload.git"
+  },
+  "keywords": [
+    "firestore"
+  ],
+  "author": "Vivien Barbier",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/Vivienbarbier/data_upload/issues"
+  },
+  "homepage": "https://github.com/Vivienbarbier/data_upload#readme",
+  "dependencies": {
+    "firebase-admin": "^10.0.0"
+  }
+}
