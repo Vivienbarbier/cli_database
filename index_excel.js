@@ -36,12 +36,20 @@ loadDataInToFireStore();
 
 
 async function loadDataInToFireStore() {
-    var teaser = Object({ list : [] })      
-    for ( docKey in data) {
+    var teaser = Object({ list : [], records :[], previsions : [] })
+    db.collection("case").doc(business_unit_code).set(teaser).then((res) => {
+        console.log("Empty Teaser creation : \tOK");
+    }).catch((error) => {
+        console.error("Empty Teaser creation : \tError ", error);
+    }); 
+    
+    
+
+    for (docKey in data) {
         var doc = data[docKey];
         
         if (doc.initial_revenu === undefined)               doc.initial_revenu              = 0; 
-        if (doc.initial_marging  === undefined)             doc.initial_marging             = 0;
+        if (doc.initial_margin  === undefined)              doc.initial_margin             = 0;
         if (doc.budget_eng_cost === undefined)              doc.budget_eng_cost             = 0;
         if (doc.budget_field_hours === undefined)           doc.budget_field_hours          = 0;
         if (doc.budget_workforce_cost === undefined)        doc.budget_workforce_cost       = 0;
@@ -64,6 +72,7 @@ async function loadDataInToFireStore() {
             if (doc[headersMapping[k]] === undefined) doc[headersMapping[k]] = "-";
         }
 
+        var margin_rate = (doc.initial_revenu === 0) ? 0 : doc.initial_margin / doc.initial_revenu;
 
         var record = Object({
             work_order : doc.work_order_number,
@@ -144,7 +153,7 @@ async function loadDataInToFireStore() {
                 subcontracting :  doc.prev_subcontracting_cost,
                 total :  doc.prev_total_cost,
                 revenu : doc.prev_revenu,
-                marging : doc.prev_marging,
+                margin : doc.prev_margin,
                 risk_amount : doc.risk_amount,
                 risk_description : doc.risk_description,
             },
@@ -153,12 +162,13 @@ async function loadDataInToFireStore() {
                     description : doc.provision_description
             },
             ytd : {
-                workforce : doc.YTD_field_cost,
-                material : doc.YTD_material_cost,
-                subcontracting : doc.YTD_subcontracting_cost,
-                total : doc.YTD_total_cost,
-                stock : doc.YTD_stock,
-                marging: doc.YTD_marging
+                workforce :         doc.YTD_field_cost,
+                material :          doc.YTD_material_cost,
+                subcontracting :    doc.YTD_subcontracting_cost,
+                total :             doc.YTD_total_cost,
+                stock :             doc.YTD_stock,
+                margin:             doc.YTD_margin,
+                revenu :            doc.YTD_total_cost + doc.YTD_stock + doc.YTD_margin,
             },
             situation : {
                 activity : doc.produit_revenu,
@@ -170,31 +180,47 @@ async function loadDataInToFireStore() {
                 remaining_current_year_revenu : doc.remaining_current_year_revenu,
                 projection_next_years_revenu  : doc.projection_next_years_revenu,
                 PAR : doc.PAR,
-            }
+            },
+            records : [],
+            previsions : []
         });
+        
+        record.records = CreateRecords(
+            doc.initial_revenu,
+            doc.initial_margin,
+            record.budget.workforce,
+            record.budget.material,
+            record.budget.subcontracting,
+            record.schedule.start_date,
+            record.schedule.end_date,
+            teaser.records);
+            
+        record.previsions = CreatePrevisions(
+            doc.initial_revenu,
+            doc.initial_margin,
+            record.budget.workforce,
+            record.budget.material,
+            record.budget.subcontracting,
+            record.schedule.start_date,
+            record.schedule.end_date,
+            teaser.previsions);
+        
 
-           const refDoc = await db.collection("case").doc("OCPL").collection("current").add(record).catch((error) => {
-               console.error("Error writing document: ", error);
-           });
-           console.log("Document " + refDoc.id + " successfully written!");
-           teaser.list.push({
-               work_order_number : record.work_order,
-               imputation_code   : record.imputation_code,
-               owner : record.owners.execution,
-               name : record.contract.name,
-               client: record.contract.client,
-               start_date: record.schedule.start_date,
-               revenu : record.contract.revenu,
-               progress : parseInt(record.progress*100),
-               status : record.status,
-               id : refDoc.id,
-           });
-        }
-    db.collection("case").doc(business_unit_code).set(teaser).then((res) => {
-        console.log("Teaser Created");
-    }).catch((error) => {
-        console.error("Error writing document: ", error);
-    });   
+        const refDoc = await db.collection("case").doc("OCPL").collection("current").add(record).catch((error) => {
+            console.error("Error writing document: ", error);
+        });
+        console.log("Document " + refDoc.id + " successfully written!");         
+    }
+    db.collection("case").doc(business_unit_code).update( {
+        records : teaser.records.sort((a,b) => {
+            return a.ts - b.ts; 
+        }), 
+        previsions : teaser.previsions.sort((a,b) => {
+            return a.ts - b.ts; 
+        }), 
+    } ).catch((error) => {
+        console.error("Error writing teaser document: ", error);
+    });
 }
 
 function ExcelDateToJSTimestamp(serial) {
@@ -210,6 +236,117 @@ function ExcelDateToJSTimestamp(serial) {
     var utc_days  = Math.floor(serial - 25569);
     var utc_value = utc_days * 86400;                                        
     var date_info = new Date(utc_value * 1000);
-    return date_info.getFullYear() + "-" +(date_info.getMonth()<9 ? "0" : "") + (date_info.getMonth()+1) + "-" + (date_info.getDate()<10 ? "0" : "") + date_info.getDate() ;
-  
+    return date_info.getFullYear() + "-" +(date_info.getMonth()<9 ? "0" : "") + (date_info.getMonth()+1) + "-" + (date_info.getDate()<10 ? "0" : "") + date_info.getDate();
 }
+
+function getWeekNumber(date){
+    var oneJan = new Date(date.getFullYear(),0,1);
+    var numberOfDays = Math.floor((date - oneJan) / (24 * 60 * 60 * 1000));
+    var result = Math.ceil(( date.getDay() + 1 + numberOfDays) / 7);
+    return result;    
+}
+
+
+function CreateRecords(revenu, margin, workforce, material, subcontracting, start_date, end_date, teaser ){
+    var records = [];
+    let start = new Date(start_date);
+    let end = new Date(end_date);
+    let duration_weeks = (end.getTime() - start.getTime()) / (7000 * 3600 * 24);
+    var date = start;
+    let today = new Date();
+
+    for (var i =0; i < duration_weeks ; i++){    
+        if(date >= today) break;
+        let dateStr = date.toISOString().slice(0, 10)
+        const record = {
+            date :  dateStr , 
+            ts :    date.getTime(),
+            revenu : (revenu / duration_weeks),
+            margin : (margin / duration_weeks),
+            workforce : (workforce / duration_weeks),
+            material : (material / duration_weeks),
+            subcontracting : (subcontracting / duration_weeks)
+        }
+        records.push(record)
+        const recIndex = teaser.findIndex( r => r.date === dateStr);
+        if(recIndex === -1){
+            teaser.push(record); 
+        }else{
+            teaser[recIndex].revenu          += record.revenu;
+            teaser[recIndex].margin          += record.margin;
+            teaser[recIndex].workforce       += record.workforce;
+            teaser[recIndex].material        += record.material;
+            teaser[recIndex].subcontracting  += record.subcontracting;
+        }
+        date.setDate(date.getDate()+7);
+    }
+    return records;
+}
+
+function CreatePrevisions(revenu, margin, workforce, material, subcontracting, start_date, end_date,teaser){
+    var previsions = [];
+    let start = new Date(start_date);
+    let end = new Date(end_date);
+    let duration_weeks = (end.getTime() - start.getTime()) / (7000 * 3600 * 24);
+    var key ="";
+    var date = new Date(); // Today
+    for (var i =0; i < duration_weeks ; i++){    
+        if(date >= end) break;
+        let dateStr = date.toISOString().slice(0, 10)
+        const prevision = {
+            date :  dateStr ,
+            ts: date.getTime(),
+            revenu : (revenu / duration_weeks),
+            margin : (margin / duration_weeks),
+            workforce : (workforce / duration_weeks),
+            material : (material / duration_weeks),
+            subcontracting : (subcontracting / duration_weeks)
+        };
+        previsions.push(prevision);
+        const recIndex = teaser.findIndex( r => r.date === dateStr);
+        if(recIndex === -1){
+            teaser.push(prevision); 
+        }else{
+            teaser[recIndex].revenu          += prevision.revenu;
+            teaser[recIndex].margin          += prevision.margin;
+            teaser[recIndex].workforce       += prevision.workforce;
+            teaser[recIndex].material        += prevision.material;
+            teaser[recIndex].subcontracting  += prevision.subcontracting;
+        }
+        date.setDate(date.getDate()+7);
+    }
+    return previsions;
+}
+
+
+
+//function CreateHistoryRecords(value, start_date, end_date){
+//    var records = [];
+//    let start = new Date(start_date);
+//    let end = new Date(end_date);
+//    let duration_weeks = (end.getTime() - start.getTime()) / (7000 * 3600 * 24);
+//    var key ="";
+//    var date = start;
+//    let today = new Date();
+//    for (var i =0; i < duration_weeks ; i++){    
+//        if(date >= today) break;
+//        records.push({date :  date.toISOString().slice(0, 10) , v: (value / duration_weeks) })
+//        date.setDate(date.getDate()+7);
+//    }
+//    return records;
+//}
+//
+//function CreatePrevisions(value, start_date, end_date){
+//    var previsions = [];
+//    let start = new Date(start_date);
+//    let end = new Date(end_date);
+//    let duration_weeks = (end.getTime() - start.getTime()) / (7000 * 3600 * 24);
+//    var key ="";
+//    var date = new Date(); // Today
+//    for (var i =0; i < duration_weeks ; i++){    
+//        if(date >= end) break;
+//        previsions.push({date : date.toISOString().slice(0, 10) , v: (value / duration_weeks) })
+//        date.setDate(date.getDate()+7);
+//    }
+//    return previsions;
+//}
